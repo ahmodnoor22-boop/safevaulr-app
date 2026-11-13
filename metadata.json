@@ -1,0 +1,6 @@
+{
+  "name": "SafeVault",
+  "description": "Professional Secure Cloud Storage & Data Recovery with encrypted vault, files, photos, notes, and backup recovery.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

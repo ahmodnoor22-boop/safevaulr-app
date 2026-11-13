@@ -1,0 +1,297 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "SafeVault cloud user profile, verified mobile number, hashed master password, subscription plan, referral stats, and synced preferences.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "fullName": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "email": { "type": "string" },
+        "avatarEmoji": { "type": "string" },
+        "passwordHash": { "type": "string" },
+        "salt": { "type": "string" },
+        "masterPin": { "type": "string" },
+        "isVerified": { "type": "boolean" },
+        "autoSyncEnabled": { "type": "boolean" },
+        "darkModeEnabled": { "type": "boolean" },
+        "adConfigEnabled": { "type": "boolean" },
+        "adTestMode": { "type": "boolean" },
+        "adZoneId": { "type": "string" },
+        "totalQuotaBytes": { "type": "integer" },
+        "accountStatus": { "type": "string", "enum": ["ACTIVE", "BLOCKED"] },
+        "blockReason": { "type": "string" },
+        "planId": { "type": "string" },
+        "planName": { "type": "string" },
+        "planTier": { "type": "string", "enum": ["FREE", "PREMIUM"] },
+        "planPrice": { "type": "number" },
+        "planExpiresAt": { "type": "integer" },
+        "referralCode": { "type": "string" },
+        "referredByUid": { "type": "string" },
+        "referredByCode": { "type": "string" },
+        "referralCount": { "type": "integer" },
+        "referralBonusBytes": { "type": "integer" },
+        "referralRewardPoints": { "type": "integer" },
+        "lastActiveAt": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()" }
+      },
+      "required": ["userId", "fullName", "phoneNumber", "passwordHash", "salt", "isVerified", "createdAt", "updatedAt"]
+    },
+    "CloudFolder": {
+      "title": "CloudFolder",
+      "description": "Cloud-synced user folder preserving hierarchy, color, and file counts.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "colorHex": { "type": "string" },
+        "iconName": { "type": "string" },
+        "parentFolderId": { "type": "string" },
+        "filesCount": { "type": "integer" },
+        "sizeBytes": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name", "colorHex", "filesCount", "sizeBytes", "createdAt", "updatedAt"]
+    },
+    "CloudFile": {
+      "title": "CloudFile",
+      "description": "Cloud-backed file metadata for photos, videos, audio, PDF, Office docs, archives, notes, and SHA-256 deduplication.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "fileType": { "type": "string", "enum": ["IMAGE", "VIDEO", "AUDIO", "PDF", "DOCUMENT", "ARCHIVE", "NOTE", "OTHER"] },
+        "mimeType": { "type": "string" },
+        "extension": { "type": "string" },
+        "sizeBytes": { "type": "integer" },
+        "folderId": { "type": "string" },
+        "folderName": { "type": "string" },
+        "checksumSha256": { "type": "string" },
+        "chunkCount": { "type": "integer" },
+        "isEncrypted": { "type": "boolean" },
+        "encryptedContent": { "type": "string" },
+        "isFavorite": { "type": "boolean" },
+        "tags": { "type": "array" },
+        "syncStatus": { "type": "string", "enum": ["SYNCED", "PENDING", "RESTORED"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name", "fileType", "mimeType", "extension", "sizeBytes", "checksumSha256", "chunkCount", "isEncrypted", "isFavorite", "syncStatus", "createdAt", "updatedAt"]
+    },
+    "FileChunk": {
+      "title": "FileChunk",
+      "description": "AES-256 encrypted Base64 binary chunk of a backed-up cloud file.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "fileId": { "type": "string" },
+        "chunkIndex": { "type": "integer" },
+        "encryptedBase64": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "fileId", "chunkIndex", "encryptedBase64", "createdAt"]
+    },
+    "VaultItem": {
+      "title": "VaultItem",
+      "description": "AES-256 encrypted personal information, password, bank card, ID, or recovery key.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "category": { "type": "string", "enum": ["PASSWORD", "BANK_CARD", "IDENTITY_DOC", "SECRET_NOTE", "CRYPTO_KEY"] },
+        "title": { "type": "string" },
+        "usernameOrId": { "type": "string" },
+        "encryptedSecret": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "category", "title", "usernameOrId", "encryptedSecret", "createdAt", "updatedAt"]
+    },
+    "AdminMember": {
+      "title": "AdminMember",
+      "description": "Authorized admin account with RBAC role, granular permissions, and optional secondary security PIN hash.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "fullName": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["SUPER_ADMIN", "MODERATOR", "SUPPORT_ADMIN"] },
+        "permissions": { "type": "array" },
+        "adminPinHash": { "type": "string" },
+        "adminPinSalt": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "fullName", "role", "permissions", "isActive", "createdAt", "updatedAt"]
+    },
+    "SubscriptionPlan": {
+      "title": "SubscriptionPlan",
+      "description": "Admin-managed cloud storage plan defining pricing, duration, storage quota, file limits, and benefits.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "tier": { "type": "string", "enum": ["FREE", "PREMIUM"] },
+        "price": { "type": "number" },
+        "currency": { "type": "string" },
+        "durationDays": { "type": "integer" },
+        "storageQuotaGb": { "type": "integer" },
+        "maxFileSizeMb": { "type": "integer" },
+        "features": { "type": "array" },
+        "adsRemoved": { "type": "boolean" },
+        "isActive": { "type": "boolean" },
+        "createdByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "tier", "price", "currency", "durationDays", "storageQuotaGb", "maxFileSizeMb", "features", "adsRemoved", "isActive", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "ReferralRecord": {
+      "title": "ReferralRecord",
+      "description": "Tracked user referral event with anti-fraud fingerprint and admin reward verification.",
+      "type": "object",
+      "properties": {
+        "referrerUid": { "type": "string" },
+        "referrerName": { "type": "string" },
+        "referrerPhone": { "type": "string" },
+        "referralCode": { "type": "string" },
+        "referredUid": { "type": "string" },
+        "referredName": { "type": "string" },
+        "referredPhone": { "type": "string" },
+        "deviceFingerprintHash": { "type": "string" },
+        "status": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED"] },
+        "rewardPoints": { "type": "integer" },
+        "rewardStorageBytes": { "type": "integer" },
+        "fraudReason": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["referrerUid", "referralCode", "referredUid", "deviceFingerprintHash", "status", "rewardPoints", "rewardStorageBytes", "createdAt", "updatedAt"]
+    },
+    "ReferralCodeIndex": {
+      "title": "ReferralCodeIndex",
+      "description": "Public code-to-UID lookup index so invitees resolve a referral code without listing user PII.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "ownerUid", "ownerName", "isActive", "createdAt"]
+    },
+    "AppSettings": {
+      "title": "AppSettings",
+      "description": "Global application configuration controlled by authorized admins.",
+      "type": "object",
+      "properties": {
+        "appName": { "type": "string" },
+        "appTagline": { "type": "string" },
+        "appLogoStyle": { "type": "string" },
+        "maintenanceMode": { "type": "boolean" },
+        "maintenanceMessage": { "type": "string" },
+        "announcementEnabled": { "type": "boolean" },
+        "announcementTitle": { "type": "string" },
+        "announcementMessage": { "type": "string" },
+        "supportEmail": { "type": "string" },
+        "supportPhone": { "type": "string" },
+        "supportWhatsApp": { "type": "string" },
+        "termsAndConditions": { "type": "string" },
+        "privacyPolicy": { "type": "string" },
+        "referralEnabled": { "type": "boolean" },
+        "referralRewardPoints": { "type": "integer" },
+        "referralRewardBonusMb": { "type": "integer" },
+        "updatedByUid": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["appName", "maintenanceMode", "referralEnabled", "referralRewardPoints", "referralRewardBonusMb", "updatedByUid", "updatedAt"]
+    },
+    "AppNotification": {
+      "title": "AppNotification",
+      "description": "Admin-managed broadcast notification for all or tiered users.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "priority": { "type": "string", "enum": ["INFO", "WARNING", "PROMO"] },
+        "targetAudience": { "type": "string", "enum": ["ALL", "FREE", "PREMIUM"] },
+        "isActive": { "type": "boolean" },
+        "createdByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "message", "priority", "targetAudience", "isActive", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "AdminAuditLog": {
+      "title": "AdminAuditLog",
+      "description": "Immutable security audit log tracking all sensitive admin actions.",
+      "type": "object",
+      "properties": {
+        "actorUid": { "type": "string" },
+        "actorName": { "type": "string" },
+        "actorRole": { "type": "string" },
+        "action": { "type": "string" },
+        "targetType": { "type": "string", "enum": ["USER", "PLAN", "REFERRAL", "SETTINGS", "NOTIFICATION", "ADMIN"] },
+        "targetId": { "type": "string" },
+        "details": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["actorUid", "actorName", "actorRole", "action", "targetType", "targetId", "details", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile, credentials, plan info, referral stats, and synced settings."
+    },
+    "/users/{userId}/folders/{folderId}": {
+      "schema": { "$ref": "#/entities/CloudFolder" },
+      "description": "User's cloud-backed folders."
+    },
+    "/users/{userId}/files/{fileId}": {
+      "schema": { "$ref": "#/entities/CloudFile" },
+      "description": "User's cloud-backed file metadata and notes."
+    },
+    "/users/{userId}/files/{fileId}/chunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/FileChunk" },
+      "description": "AES-256 encrypted binary chunks for full file backup and recovery."
+    },
+    "/users/{userId}/vault_items/{itemId}": {
+      "schema": { "$ref": "#/entities/VaultItem" },
+      "description": "User's encrypted personal vault records."
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminMember" },
+      "description": "Authorized admin roles and permissions."
+    },
+    "/plans/{planId}": {
+      "schema": { "$ref": "#/entities/SubscriptionPlan" },
+      "description": "Subscription plans created and managed by admins."
+    },
+    "/referrals/{referralId}": {
+      "schema": { "$ref": "#/entities/ReferralRecord" },
+      "description": "Referral invite history, anti-fraud metadata, and rewards."
+    },
+    "/referral_codes/{code}": {
+      "schema": { "$ref": "#/entities/ReferralCodeIndex" },
+      "description": "Unique referral code index."
+    },
+    "/app_settings/global": {
+      "schema": { "$ref": "#/entities/AppSettings" },
+      "description": "Global application settings, maintenance mode, and legal docs."
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/AppNotification" },
+      "description": "Broadcast notifications managed by admins."
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AdminAuditLog" },
+      "description": "Immutable admin security audit trail."
+    }
+  }
+}

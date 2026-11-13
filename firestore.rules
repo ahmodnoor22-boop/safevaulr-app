@@ -1,0 +1,658 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: deny all reads/writes by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reusable security & validation primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isBootstrappedOwnerEmail() {
+      return isSignedIn() &&
+             'email' in request.auth.token &&
+             request.auth.token.email == 'ahmodnoor22@gmail.com' &&
+             'email_verified' in request.auth.token &&
+             request.auth.token.email_verified == true;
+    }
+
+    function adminDoc() {
+      return get(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function isActiveAdmin() {
+      return isBootstrappedOwnerEmail() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+        adminDoc().data.isActive == true
+      );
+    }
+
+    function hasAdminPermission(perm) {
+      return isBootstrappedOwnerEmail() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+        adminDoc().data.isActive == true &&
+        (adminDoc().data.role == 'SUPER_ADMIN' || perm in adminDoc().data.permissions)
+      );
+    }
+
+    function hasAnyAdminPerm(perms) {
+      return isBootstrappedOwnerEmail() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+        adminDoc().data.isActive == true &&
+        (adminDoc().data.role == 'SUPER_ADMIN' || adminDoc().data.permissions.hasAny(perms))
+      );
+    }
+
+    // 1. UserProfile schema validation
+    function isValidUserProfile(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 100 &&
+             data.phoneNumber is string && data.phoneNumber.size() >= 5 && data.phoneNumber.size() <= 30 &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 120)) &&
+             (!('avatarEmoji' in data) || (data.avatarEmoji is string && data.avatarEmoji.size() <= 16)) &&
+             data.passwordHash is string && data.passwordHash.size() >= 16 && data.passwordHash.size() <= 256 &&
+             data.salt is string && data.salt.size() >= 8 && data.salt.size() <= 128 &&
+             (!('masterPin' in data) || (data.masterPin is string && data.masterPin.size() <= 128)) &&
+             data.isVerified is bool &&
+             (!('autoSyncEnabled' in data) || data.autoSyncEnabled is bool) &&
+             (!('darkModeEnabled' in data) || data.darkModeEnabled is bool) &&
+             (!('adConfigEnabled' in data) || data.adConfigEnabled is bool) &&
+             (!('adTestMode' in data) || data.adTestMode is bool) &&
+             (!('adZoneId' in data) || (data.adZoneId is string && data.adZoneId.size() <= 128)) &&
+             (!('totalQuotaBytes' in data) || (data.totalQuotaBytes is int && data.totalQuotaBytes > 0)) &&
+             (!('accountStatus' in data) || data.accountStatus in ['ACTIVE', 'BLOCKED']) &&
+             (!('blockReason' in data) || (data.blockReason is string && data.blockReason.size() <= 300)) &&
+             (!('planId' in data) || (data.planId is string && data.planId.size() <= 128)) &&
+             (!('planName' in data) || (data.planName is string && data.planName.size() <= 100)) &&
+             (!('planTier' in data) || data.planTier in ['FREE', 'PREMIUM']) &&
+             (!('planPrice' in data) || ((data.planPrice is int || data.planPrice is float) && data.planPrice >= 0)) &&
+             (!('planExpiresAt' in data) || (data.planExpiresAt is int && data.planExpiresAt >= 0)) &&
+             (!('referralCode' in data) || (data.referralCode is string && data.referralCode.size() <= 32)) &&
+             (!('referredByUid' in data) || (data.referredByUid is string && data.referredByUid.size() <= 128)) &&
+             (!('referredByCode' in data) || (data.referredByCode is string && data.referredByCode.size() <= 32)) &&
+             (!('referralCount' in data) || (data.referralCount is int && data.referralCount >= 0)) &&
+             (!('referralBonusBytes' in data) || (data.referralBonusBytes is int && data.referralBonusBytes >= 0)) &&
+             (!('referralRewardPoints' in data) || (data.referralRewardPoints is int && data.referralRewardPoints >= 0)) &&
+             (!('lastActiveAt' in data) || (data.lastActiveAt is int && data.lastActiveAt >= 0)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function hasSafeInitialUserPrivileges(data) {
+      return (!('accountStatus' in data) || data.accountStatus == 'ACTIVE') &&
+             (!('blockReason' in data) || data.blockReason == '') &&
+             (!('planId' in data) || data.planId == 'free') &&
+             (!('planTier' in data) || data.planTier == 'FREE') &&
+             (!('planPrice' in data) || data.planPrice == 0) &&
+             (!('planExpiresAt' in data) || data.planExpiresAt == 0) &&
+             (!('referralCount' in data) || data.referralCount == 0) &&
+             (!('referralBonusBytes' in data) || data.referralBonusBytes == 0) &&
+             (!('referralRewardPoints' in data) || data.referralRewardPoints == 0);
+    }
+
+    // 2. CloudFolder schema validation
+    function isValidCloudFolder(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+             data.colorHex is string && data.colorHex.size() >= 4 && data.colorHex.size() <= 16 &&
+             (!('iconName' in data) || (data.iconName is string && data.iconName.size() <= 64)) &&
+             (!('parentFolderId' in data) || (data.parentFolderId is string && data.parentFolderId.size() <= 128)) &&
+             data.filesCount is int && data.filesCount >= 0 &&
+             data.sizeBytes is int && data.sizeBytes >= 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // 3. CloudFile schema validation
+    function isValidCloudFile(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 200 &&
+             data.fileType in ['IMAGE', 'VIDEO', 'AUDIO', 'PDF', 'DOCUMENT', 'ARCHIVE', 'NOTE', 'OTHER'] &&
+             data.mimeType is string && data.mimeType.size() >= 1 && data.mimeType.size() <= 128 &&
+             data.extension is string && data.extension.size() >= 1 && data.extension.size() <= 16 &&
+             data.sizeBytes is int && data.sizeBytes >= 0 &&
+             (!('folderId' in data) || (data.folderId is string && data.folderId.size() <= 128)) &&
+             (!('folderName' in data) || (data.folderName is string && data.folderName.size() <= 120)) &&
+             data.checksumSha256 is string && data.checksumSha256.size() <= 128 &&
+             data.chunkCount is int && data.chunkCount >= 0 && data.chunkCount <= 100 &&
+             data.isEncrypted is bool &&
+             (!('encryptedContent' in data) || (data.encryptedContent is string && data.encryptedContent.size() <= 250000)) &&
+             data.isFavorite is bool &&
+             (!('tags' in data) || (data.tags is list && data.tags.size() <= 10 && (data.tags.size() == 0 || data.tags[0] is string))) &&
+             data.syncStatus in ['SYNCED', 'PENDING', 'RESTORED'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // 4. FileChunk schema validation
+    function isValidFileChunk(data, userId, fileId) {
+      return data.userId is string && data.userId == userId &&
+             data.fileId is string && data.fileId == fileId &&
+             data.chunkIndex is int && data.chunkIndex >= 0 && data.chunkIndex < 100 &&
+             data.encryptedBase64 is string && data.encryptedBase64.size() <= 800000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    // 5. VaultItem schema validation
+    function isValidVaultItem(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.category in ['PASSWORD', 'BANK_CARD', 'IDENTITY_DOC', 'SECRET_NOTE', 'CRYPTO_KEY'] &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.usernameOrId is string && data.usernameOrId.size() <= 200 &&
+             data.encryptedSecret is string && data.encryptedSecret.size() >= 1 && data.encryptedSecret.size() <= 50000 &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 2000)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // 6. AdminMember schema validation
+    function isValidAdminMember(data, adminUid) {
+      return data.uid is string && data.uid == adminUid &&
+             data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 100 &&
+             (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 30)) &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 120)) &&
+             data.role in ['SUPER_ADMIN', 'MODERATOR', 'SUPPORT_ADMIN'] &&
+             data.permissions is list && data.permissions.size() <= 10 &&
+             (data.permissions.size() == 0 || data.permissions[0] is string) &&
+             (!('adminPinHash' in data) || (data.adminPinHash is string && data.adminPinHash.size() <= 256)) &&
+             (!('adminPinSalt' in data) || (data.adminPinSalt is string && data.adminPinSalt.size() <= 128)) &&
+             data.isActive is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // 7. SubscriptionPlan schema validation
+    function isValidSubscriptionPlan(data) {
+      return data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.tier in ['FREE', 'PREMIUM'] &&
+             (data.price is int || data.price is float) && data.price >= 0 &&
+             data.currency is string && data.currency.size() >= 1 && data.currency.size() <= 12 &&
+             data.durationDays is int && data.durationDays >= 0 && data.durationDays <= 36500 &&
+             data.storageQuotaGb is int && data.storageQuotaGb >= 1 && data.storageQuotaGb <= 100000 &&
+             data.maxFileSizeMb is int && data.maxFileSizeMb >= 1 && data.maxFileSizeMb <= 10000 &&
+             data.features is list && data.features.size() <= 15 &&
+             (data.features.size() == 0 || data.features[0] is string) &&
+             data.adsRemoved is bool &&
+             data.isActive is bool &&
+             data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // 8. ReferralRecord schema validation
+    function isValidReferralRecord(data) {
+      return data.referrerUid is string && data.referrerUid.size() >= 1 && data.referrerUid.size() <= 128 &&
+             (!('referrerName' in data) || (data.referrerName is string && data.referrerName.size() <= 100)) &&
+             (!('referrerPhone' in data) || (data.referrerPhone is string && data.referrerPhone.size() <= 30)) &&
+             data.referralCode is string && data.referralCode.size() >= 3 && data.referralCode.size() <= 32 &&
+             data.referredUid is string && data.referredUid.size() >= 1 && data.referredUid.size() <= 128 &&
+             data.referredUid != data.referrerUid &&
+             (!('referredName' in data) || (data.referredName is string && data.referredName.size() <= 100)) &&
+             (!('referredPhone' in data) || (data.referredPhone is string && data.referredPhone.size() <= 30)) &&
+             data.deviceFingerprintHash is string && data.deviceFingerprintHash.size() >= 8 && data.deviceFingerprintHash.size() <= 128 &&
+             data.status in ['PENDING', 'APPROVED', 'REJECTED'] &&
+             data.rewardPoints is int && data.rewardPoints >= 0 && data.rewardPoints <= 1000000 &&
+             data.rewardStorageBytes is int && data.rewardStorageBytes >= 0 &&
+             (!('fraudReason' in data) || (data.fraudReason is string && data.fraudReason.size() <= 300)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // 9. ReferralCodeIndex schema validation
+    function isValidReferralCodeIndex(data, code) {
+      return data.code is string && data.code == code && data.code.size() >= 3 && data.code.size() <= 32 &&
+             data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 100 &&
+             data.isActive is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    // 10. AppSettings schema validation
+    function isValidAppSettings(data) {
+      return data.appName is string && data.appName.size() >= 1 && data.appName.size() <= 40 &&
+             (!('appTagline' in data) || (data.appTagline is string && data.appTagline.size() <= 160)) &&
+             (!('appLogoStyle' in data) || (data.appLogoStyle is string && data.appLogoStyle.size() <= 64)) &&
+             data.maintenanceMode is bool &&
+             (!('maintenanceMessage' in data) || (data.maintenanceMessage is string && data.maintenanceMessage.size() <= 500)) &&
+             (!('announcementEnabled' in data) || data.announcementEnabled is bool) &&
+             (!('announcementTitle' in data) || (data.announcementTitle is string && data.announcementTitle.size() <= 120)) &&
+             (!('announcementMessage' in data) || (data.announcementMessage is string && data.announcementMessage.size() <= 1000)) &&
+             (!('supportEmail' in data) || (data.supportEmail is string && data.supportEmail.size() <= 120)) &&
+             (!('supportPhone' in data) || (data.supportPhone is string && data.supportPhone.size() <= 40)) &&
+             (!('supportWhatsApp' in data) || (data.supportWhatsApp is string && data.supportWhatsApp.size() <= 40)) &&
+             (!('termsAndConditions' in data) || (data.termsAndConditions is string && data.termsAndConditions.size() <= 15000)) &&
+             (!('privacyPolicy' in data) || (data.privacyPolicy is string && data.privacyPolicy.size() <= 15000)) &&
+             data.referralEnabled is bool &&
+             data.referralRewardPoints is int && data.referralRewardPoints >= 0 && data.referralRewardPoints <= 1000000 &&
+             data.referralRewardBonusMb is int && data.referralRewardBonusMb >= 0 && data.referralRewardBonusMb <= 102400 &&
+             data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // 11. AppNotification schema validation
+    function isValidAppNotification(data) {
+      return data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.message is string && data.message.size() >= 1 && data.message.size() <= 1000 &&
+             data.priority in ['INFO', 'WARNING', 'PROMO'] &&
+             data.targetAudience in ['ALL', 'FREE', 'PREMIUM'] &&
+             data.isActive is bool &&
+             data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // 12. AdminAuditLog schema validation
+    function isValidAuditLog(data) {
+      return data.actorUid is string && data.actorUid.size() >= 1 && data.actorUid.size() <= 128 &&
+             data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 100 &&
+             data.actorRole is string && data.actorRole.size() >= 1 && data.actorRole.size() <= 40 &&
+             data.action is string && data.action.size() >= 1 && data.action.size() <= 64 &&
+             data.targetType in ['USER', 'PLAN', 'REFERRAL', 'SETTINGS', 'NOTIFICATION', 'ADMIN'] &&
+             data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128 &&
+             data.details is string && data.details.size() <= 1000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    // ------------------------------------------------------------------------
+    // Collection Rules
+    // ------------------------------------------------------------------------
+
+    // User profile & settings document
+    match /users/{userId} {
+      allow get: if (isOwner(userId) || isActiveAdmin()) && isValidId(userId);
+      allow list: if isActiveAdmin();
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().keys().hasAll(['userId', 'fullName', 'phoneNumber', 'passwordHash', 'salt', 'isVerified', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'fullName', 'phoneNumber', 'email', 'avatarEmoji',
+                         'passwordHash', 'salt', 'masterPin', 'isVerified',
+                         'autoSyncEnabled', 'darkModeEnabled', 'adConfigEnabled',
+                         'adTestMode', 'adZoneId', 'totalQuotaBytes',
+                         'accountStatus', 'blockReason', 'planId', 'planName', 'planTier', 'planPrice', 'planExpiresAt',
+                         'referralCode', 'referredByUid', 'referredByCode', 'referralCount', 'referralBonusBytes', 'referralRewardPoints',
+                         'lastActiveAt', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidUserProfile(incoming(), userId) &&
+                       hasSafeInitialUserPrivileges(incoming());
+
+      allow update: if isValidId(userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (
+                         (
+                           isOwner(userId) &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'fullName', 'phoneNumber', 'email', 'avatarEmoji',
+                             'passwordHash', 'salt', 'masterPin', 'isVerified',
+                             'autoSyncEnabled', 'darkModeEnabled', 'adConfigEnabled',
+                             'adTestMode', 'adZoneId', 'referralCode', 'lastActiveAt', 'updatedAt',
+                             'referredByUid', 'referredByCode'
+                           ]) &&
+                           (
+                             !('referredByUid' in incoming()) ||
+                             incoming().referredByUid == existing().referredByUid ||
+                             !('referredByUid' in existing()) ||
+                             existing().referredByUid == ''
+                           )
+                         ) ||
+                         (
+                           hasAnyAdminPerm(['MANAGE_USERS', 'MANAGE_REFERRALS']) &&
+                           incoming().passwordHash == existing().passwordHash &&
+                           incoming().salt == existing().salt &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'accountStatus', 'blockReason', 'planId', 'planName', 'planTier',
+                             'planPrice', 'planExpiresAt', 'totalQuotaBytes',
+                             'referralCount', 'referralBonusBytes', 'referralRewardPoints', 'updatedAt'
+                           ])
+                         )
+                       ) &&
+                       isValidUserProfile(incoming(), userId);
+
+      allow delete: if (isOwner(userId) || hasAdminPermission('MANAGE_USERS')) && isValidId(userId);
+
+      // Cloud Folders subcollection
+      match /folders/{folderId} {
+        allow get: if (isOwner(userId) || isActiveAdmin()) && isValidId(folderId);
+        allow list: if isOwner(userId) || isActiveAdmin();
+
+        allow create: if isOwner(userId) &&
+                         isValidId(folderId) &&
+                         incoming().keys().hasAll(['userId', 'name', 'colorHex', 'filesCount', 'sizeBytes', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'name', 'colorHex', 'iconName', 'parentFolderId', 'filesCount', 'sizeBytes', 'createdAt', 'updatedAt']) &&
+                         isValidCloudFolder(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(folderId) &&
+                         isValidCloudFolder(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'name', 'colorHex', 'iconName', 'parentFolderId', 'filesCount', 'sizeBytes', 'updatedAt'
+                         ]);
+
+        allow delete: if (isOwner(userId) || hasAdminPermission('MANAGE_USERS')) && isValidId(folderId);
+      }
+
+      // Cloud Files subcollection
+      match /files/{fileId} {
+        allow get: if (isOwner(userId) || isActiveAdmin()) && isValidId(fileId);
+        allow list: if isOwner(userId) || isActiveAdmin();
+
+        allow create: if isOwner(userId) &&
+                         isValidId(fileId) &&
+                         incoming().keys().hasAll(['userId', 'name', 'fileType', 'mimeType', 'extension', 'sizeBytes', 'checksumSha256', 'chunkCount', 'isEncrypted', 'isFavorite', 'syncStatus', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'name', 'fileType', 'mimeType', 'extension', 'sizeBytes',
+                           'folderId', 'folderName', 'checksumSha256', 'chunkCount',
+                           'isEncrypted', 'encryptedContent', 'isFavorite', 'tags',
+                           'syncStatus', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidCloudFile(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(fileId) &&
+                         isValidCloudFile(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'name', 'fileType', 'mimeType', 'extension', 'sizeBytes',
+                           'folderId', 'folderName', 'checksumSha256', 'chunkCount',
+                           'isEncrypted', 'encryptedContent', 'isFavorite', 'tags',
+                           'syncStatus', 'updatedAt'
+                         ]);
+
+        allow delete: if (isOwner(userId) || hasAdminPermission('MANAGE_USERS')) && isValidId(fileId);
+
+        // Encrypted File Binary Chunks subcollection
+        match /chunks/{chunkId} {
+          allow get: if (isOwner(userId) || hasAdminPermission('MANAGE_USERS')) && isValidId(fileId) && isValidId(chunkId);
+          allow list: if (isOwner(userId) || hasAdminPermission('MANAGE_USERS')) && isValidId(fileId);
+
+          allow create: if isOwner(userId) &&
+                           isValidId(fileId) &&
+                           isValidId(chunkId) &&
+                           exists(/databases/$(database)/documents/users/$(userId)/files/$(fileId)) &&
+                           incoming().keys().hasAll(['userId', 'fileId', 'chunkIndex', 'encryptedBase64', 'createdAt']) &&
+                           incoming().keys().hasOnly(['userId', 'fileId', 'chunkIndex', 'encryptedBase64', 'createdAt']) &&
+                           isValidFileChunk(incoming(), userId, fileId);
+
+          allow update: if false; // Chunks are immutable once uploaded
+          allow delete: if (isOwner(userId) || hasAdminPermission('MANAGE_USERS')) && isValidId(fileId) && isValidId(chunkId);
+        }
+      }
+
+      // Personal Encrypted Vault Items subcollection
+      match /vault_items/{itemId} {
+        allow get: if (isOwner(userId) || hasAdminPermission('MANAGE_USERS')) && isValidId(itemId);
+        allow list: if isOwner(userId) || hasAdminPermission('MANAGE_USERS');
+
+        allow create: if isOwner(userId) &&
+                         isValidId(itemId) &&
+                         incoming().keys().hasAll(['userId', 'category', 'title', 'usernameOrId', 'encryptedSecret', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'category', 'title', 'usernameOrId', 'encryptedSecret', 'notes', 'createdAt', 'updatedAt']) &&
+                         isValidVaultItem(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(itemId) &&
+                         isValidVaultItem(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'category', 'title', 'usernameOrId', 'encryptedSecret', 'notes', 'updatedAt'
+                         ]);
+
+        allow delete: if (isOwner(userId) || hasAdminPermission('MANAGE_USERS')) && isValidId(itemId);
+      }
+    }
+
+    // Authorized Admin Roles & Permissions
+    match /admins/{adminUid} {
+      allow get: if (isOwner(adminUid) || isActiveAdmin()) && isValidId(adminUid);
+      allow list: if isActiveAdmin();
+
+      allow create: if isValidId(adminUid) &&
+                       incoming().keys().hasAll(['uid', 'fullName', 'role', 'permissions', 'isActive', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly([
+                         'uid', 'fullName', 'phoneNumber', 'email', 'role', 'permissions',
+                         'adminPinHash', 'adminPinSalt', 'isActive', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidAdminMember(incoming(), adminUid) &&
+                       (
+                         hasAdminPermission('MANAGE_ADMINS') ||
+                         (isBootstrappedOwnerEmail() && request.auth.uid == adminUid)
+                       );
+
+      allow update: if isValidId(adminUid) &&
+                       isValidAdminMember(incoming(), adminUid) &&
+                       incoming().uid == existing().uid &&
+                       incoming().createdAt == existing().createdAt && (
+                         hasAdminPermission('MANAGE_ADMINS') ||
+                         (
+                           isActiveAdmin() &&
+                           request.auth.uid == adminUid &&
+                           incoming().role == existing().role &&
+                           incoming().permissions == existing().permissions &&
+                           incoming().isActive == existing().isActive &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'fullName', 'phoneNumber', 'adminPinHash', 'adminPinSalt', 'updatedAt'
+                           ])
+                         )
+                       );
+
+      allow delete: if hasAdminPermission('MANAGE_ADMINS') && isValidId(adminUid) && adminUid != request.auth.uid;
+    }
+
+    // Subscription Plans (Created/Managed by Admins; readable by signed-in users)
+    match /plans/{planId} {
+      allow get: if isSignedIn() && isValidId(planId);
+      allow list: if isSignedIn();
+
+      allow create: if hasAdminPermission('MANAGE_PLANS') &&
+                       isValidId(planId) &&
+                       incoming().keys().hasAll([
+                         'name', 'tier', 'price', 'currency', 'durationDays',
+                         'storageQuotaGb', 'maxFileSizeMb', 'features',
+                         'adsRemoved', 'isActive', 'createdByUid', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'name', 'tier', 'price', 'currency', 'durationDays',
+                         'storageQuotaGb', 'maxFileSizeMb', 'features',
+                         'adsRemoved', 'isActive', 'createdByUid', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidSubscriptionPlan(incoming());
+
+      allow update: if hasAdminPermission('MANAGE_PLANS') &&
+                       isValidId(planId) &&
+                       isValidSubscriptionPlan(incoming()) &&
+                       incoming().createdByUid == existing().createdByUid &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'name', 'tier', 'price', 'currency', 'durationDays',
+                         'storageQuotaGb', 'maxFileSizeMb', 'features',
+                         'adsRemoved', 'isActive', 'updatedAt'
+                       ]);
+
+      allow delete: if hasAdminPermission('MANAGE_PLANS') && isValidId(planId);
+    }
+
+    // Referral Records (Anti-Fraud: doc ID locked to ref_<referredUid> so 1 claim per user)
+    match /referrals/{referralId} {
+      allow get: if isValidId(referralId) && (
+        isActiveAdmin() ||
+        (isSignedIn() && (
+          referralId == ('ref_' + request.auth.uid) ||
+          (resource != null && (existing().referrerUid == request.auth.uid || existing().referredUid == request.auth.uid))
+        ))
+      );
+
+      allow list: if isActiveAdmin() || (isSignedIn() && resource.data.referrerUid == request.auth.uid);
+
+      allow create: if isSignedIn() &&
+                       isValidId(referralId) &&
+                       incoming().keys().hasAll([
+                         'referrerUid', 'referralCode', 'referredUid', 'deviceFingerprintHash',
+                         'status', 'rewardPoints', 'rewardStorageBytes', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'referrerUid', 'referrerName', 'referrerPhone', 'referralCode',
+                         'referredUid', 'referredName', 'referredPhone', 'deviceFingerprintHash',
+                         'status', 'rewardPoints', 'rewardStorageBytes', 'fraudReason',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidReferralRecord(incoming()) &&
+                       (
+                         hasAdminPermission('MANAGE_REFERRALS') ||
+                         (
+                           referralId == ('ref_' + request.auth.uid) &&
+                           incoming().referredUid == request.auth.uid &&
+                           incoming().status == 'PENDING' &&
+                           incoming().rewardPoints == 0 &&
+                           incoming().rewardStorageBytes == 0 &&
+                           exists(/databases/$(database)/documents/referral_codes/$(incoming().referralCode)) &&
+                           get(/databases/$(database)/documents/referral_codes/$(incoming().referralCode)).data.ownerUid == incoming().referrerUid
+                         )
+                       );
+
+      allow update: if hasAdminPermission('MANAGE_REFERRALS') &&
+                       isValidId(referralId) &&
+                       isValidReferralRecord(incoming()) &&
+                       incoming().referrerUid == existing().referrerUid &&
+                       incoming().referredUid == existing().referredUid &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'status', 'rewardPoints', 'rewardStorageBytes', 'fraudReason', 'updatedAt'
+                       ]);
+
+      allow delete: if hasAdminPermission('MANAGE_REFERRALS') && isValidId(referralId);
+    }
+
+    // Public Referral Code Lookup Index (no PII)
+    match /referral_codes/{code} {
+      allow get: if isSignedIn() && isValidId(code);
+      allow list: if isActiveAdmin();
+
+      allow create: if isSignedIn() &&
+                       isValidId(code) &&
+                       incoming().keys().hasAll(['code', 'ownerUid', 'ownerName', 'isActive', 'createdAt']) &&
+                       incoming().keys().hasOnly(['code', 'ownerUid', 'ownerName', 'isActive', 'createdAt']) &&
+                       isValidReferralCodeIndex(incoming(), code) &&
+                       (incoming().ownerUid == request.auth.uid || hasAdminPermission('MANAGE_REFERRALS'));
+
+      allow update: if isValidId(code) &&
+                       isValidReferralCodeIndex(incoming(), code) &&
+                       incoming().ownerUid == existing().ownerUid &&
+                       incoming().createdAt == existing().createdAt &&
+                       (existing().ownerUid == request.auth.uid || hasAdminPermission('MANAGE_REFERRALS'));
+
+      allow delete: if isValidId(code) && (
+        (isSignedIn() && existing().ownerUid == request.auth.uid) ||
+        hasAdminPermission('MANAGE_REFERRALS')
+      );
+    }
+
+    // Global App Settings Singleton
+    match /app_settings/{docId} {
+      allow get: if isSignedIn() && docId == 'global';
+      allow list: if isActiveAdmin();
+
+      allow create: if hasAdminPermission('MANAGE_SETTINGS') &&
+                       docId == 'global' &&
+                       incoming().keys().hasAll([
+                         'appName', 'maintenanceMode', 'referralEnabled',
+                         'referralRewardPoints', 'referralRewardBonusMb', 'updatedByUid', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'appName', 'appTagline', 'appLogoStyle',
+                         'maintenanceMode', 'maintenanceMessage',
+                         'announcementEnabled', 'announcementTitle', 'announcementMessage',
+                         'supportEmail', 'supportPhone', 'supportWhatsApp',
+                         'termsAndConditions', 'privacyPolicy',
+                         'referralEnabled', 'referralRewardPoints', 'referralRewardBonusMb',
+                         'updatedByUid', 'updatedAt'
+                       ]) &&
+                       isValidAppSettings(incoming());
+
+      allow update: if hasAdminPermission('MANAGE_SETTINGS') &&
+                       docId == 'global' &&
+                       isValidAppSettings(incoming());
+
+      allow delete: if false;
+    }
+
+    // Broadcast Notifications
+    match /notifications/{notificationId} {
+      allow get: if isValidId(notificationId) && (isActiveAdmin() || (isSignedIn() && resource != null && existing().isActive == true));
+      allow list: if isActiveAdmin() || (isSignedIn() && resource.data.isActive == true);
+
+      allow create: if hasAdminPermission('MANAGE_SETTINGS') &&
+                       isValidId(notificationId) &&
+                       incoming().keys().hasAll([
+                         'title', 'message', 'priority', 'targetAudience',
+                         'isActive', 'createdByUid', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'title', 'message', 'priority', 'targetAudience',
+                         'isActive', 'createdByUid', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidAppNotification(incoming());
+
+      allow update: if hasAdminPermission('MANAGE_SETTINGS') &&
+                       isValidId(notificationId) &&
+                       isValidAppNotification(incoming()) &&
+                       incoming().createdByUid == existing().createdByUid &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'title', 'message', 'priority', 'targetAudience', 'isActive', 'updatedAt'
+                       ]);
+
+      allow delete: if hasAdminPermission('MANAGE_SETTINGS') && isValidId(notificationId);
+    }
+
+    // Immutable Admin Audit Logs
+    match /audit_logs/{logId} {
+      allow get: if hasAdminPermission('VIEW_AUDIT_LOGS') && isValidId(logId);
+      allow list: if hasAdminPermission('VIEW_AUDIT_LOGS');
+
+      allow create: if isActiveAdmin() &&
+                       isValidId(logId) &&
+                       incoming().actorUid == request.auth.uid &&
+                       incoming().keys().hasAll([
+                         'actorUid', 'actorName', 'actorRole', 'action',
+                         'targetType', 'targetId', 'details', 'createdAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'actorUid', 'actorName', 'actorRole', 'action',
+                         'targetType', 'targetId', 'details', 'createdAt'
+                       ]) &&
+                       isValidAuditLog(incoming());
+
+      allow update: if false;
+      allow delete: if false;
+    }
+  }
+}
